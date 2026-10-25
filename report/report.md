@@ -140,6 +140,29 @@ DVC stores objects under their MD5 hash, so the object keys in S3 match the hash
 `dvc.lock` and `data/raw.dvc`. On a new machine, or in CI, `dvc pull` restores the exact
 dataset and model for the checked-out commit.
 
+## 4.3 Verification against a local S3 emulator
+
+The S3 workflow was also tested end to end against **moto**, a local server that implements
+the S3 API, before AWS credentials were available. The `aws` and `dvc` commands are the same
+as for real S3, except for the `--endpoint-url` / `endpointurl` setting. Every screenshot in
+this subsection is labeled *LOCAL S3 EMULATOR (moto), not real AWS*.
+
+![AWS CLI configured (emulator credentials)](../screenshots/12_s3emu_aws_cli.png)
+
+![Bucket created with `aws s3 mb`](../screenshots/13_s3emu_create_bucket.png)
+
+![S3 remote added for DVC](../screenshots/14_s3emu_dvc_remote.png)
+
+![`dvc push`: 1,802 files uploaded (1,797 images, processed data, model)](../screenshots/15_s3emu_dvc_push.png)
+
+![Bucket contents: the model object key matches its MD5 hash in `dvc.lock`](../screenshots/16_s3emu_bucket_contents.png)
+
+![Restore test: local data, model and cache deleted, then recovered with `dvc pull`](../screenshots/17_s3emu_dvc_pull_restore.png)
+
+The restore test confirms that the S3 remote holds everything needed to rebuild the
+project state. After deleting `data/raw`, `data/processed`, the model and the DVC cache,
+`dvc pull` fetched all 1,802 files and `dvc status` reported the workspace up to date.
+
 # 5. Step 4: Automated tests (`test.py`)
 
 `test.py` contains 12 pytest tests:
@@ -294,6 +317,7 @@ digit and an uploaded image:
 | **`pip install` failed inside `docker build` with `CERTIFICATE_VERIFY_FAILED`** in the development environment, which sits behind a TLS-inspecting proxy. | An optional BuildKit secret (`--secret id=pip_ca,...`) supplies the proxy CA during the build only. It is not stored in the image, and normal builds (GitHub Actions, EC2) skip it. |
 | **The scikit-learn 1.9 deprecation of `SVC(probability=True)`** (scheduled for removal in 1.11) would eventually break CI. | Switched to `CalibratedClassifierCV(SVC(...), ensemble=False)`, the recommended replacement. |
 | **User drawings do not look like the training data**: dark ink on a light background, any size. | `preprocess()` inverts light-background images and resizes to 8×8. Tests cover both cases. |
+| **S3 had to be tested before AWS credentials were available.** | Ran the `aws s3` and `dvc push`/`pull` commands against moto, a local S3-compatible emulator (Section 4.3). Only the endpoint setting differs, so the same commands work on real S3. |
 | **Deployment must be verifiable automatically.** | A Docker `HEALTHCHECK`, a CI smoke test that sends a real prediction, and a post-deploy `curl /health` against the public IP. |
 
 # 11. Conclusion
