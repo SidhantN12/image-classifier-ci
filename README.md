@@ -1,65 +1,103 @@
-# Image Classification with a GitHub Actions CI Pipeline
+# Digit Image Classifier: DVC + GitHub Actions CI/CD + Docker + AWS
 
-A handwritten-digit **image classifier** (scikit-learn SVM on the 8×8 `digits` dataset,
-99.2% test accuracy) served through a small **Flask** API, with a **GitHub Actions** CI
-pipeline that trains the model and runs the test suite on every push to `main`/`master`.
+An end-to-end MLOps project. A handwritten-digit image classifier (SVM, **99.17 %** test
+accuracy on 360 held-out images) is:
+
+- **versioned with DVC**: 1,797 raw PNG images, the processed data and the trained model, stored in an **AWS S3** remote
+- **tested and built by GitHub Actions**: the DVC pipeline is reproduced, 12 pytest tests run, and a Docker image is built, smoke-tested and pushed to GHCR
+- **deployed with Docker on AWS EC2**: the pipeline SSHes into the instance and runs the new image on port 80
+
+```
+ git push ─► GitHub Actions ─┬─ test:   dvc pull/repro ─► pytest
+                             ├─ build:  docker build ─► smoke test ─► push ghcr.io
+                             └─ deploy: ssh EC2 ─► docker pull ─► docker run -p 80:5000
+ DVC remote ◄──────────────── S3 bucket (data/raw, data/processed, model)
+```
 
 ## Project structure
 
 ```
-image-classifier-ci/
-├── .github/workflows/ci.yaml   # CI pipeline
-├── model.py                    # preprocessing, training, prediction
-├── train.py                    # trains + saves models/digit_classifier.joblib
-├── app.py                      # Flask API: GET /health, POST /predict
-├── test.py                     # 11 pytest tests (data, model, preprocessing, API)
-├── sample_images/              # example digit PNGs for trying the API
-├── screenshots/                # CI run screenshots
-└── requirements.txt
+├── .github/workflows/ci-cd.yaml   # CI/CD pipeline (test → build → deploy)
+├── dvc.yaml / dvc.lock            # DVC pipeline: prepare → train → evaluate
+├── params.yaml                    # pipeline hyper-parameters
+├── data/raw.dvc                   # DVC pointer to the 1,797-image dataset
+├── metrics.json                   # evaluation metrics (DVC metric)
+├── export_dataset.py              # writes the raw PNG dataset to data/raw/<label>/
+├── prepare.py / train.py / evaluate.py   # DVC stages
+├── model.py                       # preprocessing, model, prediction
+├── app.py + templates/index.html  # Flask web app (draw/upload a digit)
+├── test.py                        # 12 pytest tests
+├── Dockerfile / .dockerignore
+├── deploy/ec2-user-data.sh        # installs Docker on a new EC2 instance
+├── deploy/deploy-manual.sh        # manual deploy on EC2
+├── requirements.txt               # app runtime (in Docker image)
+└── requirements-dev.txt           # + dvc[s3], pytest
 ```
 
-## Run locally
+## 1. Run locally
 
 ```bash
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python train.py                # -> Test accuracy: 0.9917
-pytest test.py -v              # -> 11 passed
-python app.py                  # API on http://localhost:5000
-curl -F image=@sample_images/digit_2.png http://localhost:5000/predict
-# {"confidence":0.9794,"label":2}
+pip install -r requirements-dev.txt
+python export_dataset.py      # or: dvc pull  (after S3 is configured)
+dvc repro                     # prepare → train → evaluate
+dvc metrics show
+pytest test.py -v
+python app.py                 # http://localhost:5000
 ```
 
-## What test.py checks
-
-| Area | Tests |
-|------|-------|
-| Data | train/test split shapes, all 10 classes present |
-| Model | test accuracy ≥ 0.95, model file is saved |
-| Preprocessing | any image → 1×64 vector in 0–16, light backgrounds are inverted |
-| Prediction | ≥ 45/50 real digit images classified correctly, output format |
-| API | `/health` 200, `/predict` returns correct label, 400 on missing / invalid file |
-
-## CI pipeline (`.github/workflows/ci.yaml`)
-
-Triggers on **push** (and pull requests) to `main` or `master`. A `test` job runs on
-`ubuntu-latest` for Python 3.11 and 3.12:
-
-1. Check out code
-2. Set up Python (with pip cache)
-3. Install dependencies from `requirements.txt`
-4. Train the model (`python train.py`)
-5. Run tests (`pytest test.py -v`), with JUnit XML
-6. Upload the test results as a build artifact
-
-## Triggering the pipeline and taking screenshots
+## 2. AWS S3 as DVC remote
 
 ```bash
-git remote add origin https://github.com/<user>/image-classifier-ci.git
-git push -u origin main
+aws configure                                     # IAM user with S3 access
+aws s3 mb s3://<your-bucket> --region us-east-1
+dvc remote modify s3remote url s3://<your-bucket>/image-classifier
+dvc push                                          # uploads images, processed data, model
+aws s3 ls s3://<your-bucket>/image-classifier/ --recursive --summarize
+git commit -am "Point DVC remote to S3" && git push
 ```
 
-Then on GitHub open **Actions → CI** and take screenshots of:
-1. The workflow run list with a green ✔
-2. The run summary (both matrix jobs passed, artifacts listed)
-3. The expanded **Run tests** step showing `11 passed`
+## 3. Docker
+
+```bash
+docker build -t digit-classifier .
+docker run -d -p 8080:5000 digit-classifier       # http://localhost:8080
+```
+
+## 4. EC2 instance
+
+1. EC2 → **Launch instance**: Ubuntu 24.04, `t2.micro`/`t3.micro` (free tier), create a key pair (`.pem`).
+2. Security group inbound rules: **SSH 22** (your IP) and **HTTP 80** (0.0.0.0/0).
+3. Advanced details → **User data**: paste `deploy/ec2-user-data.sh` (installs Docker).
+4. Note the instance's **Public IPv4 address**.
+
+## 5. Connect GitHub Actions to AWS
+
+Repository → **Settings → Secrets and variables → Actions**:
+
+| Type | Name | Value |
+|------|------|-------|
+| Variable | `EC2_HOST` | EC2 public IP (enables the deploy job) |
+| Variable | `EC2_USER` | `ubuntu` |
+| Secret | `EC2_SSH_KEY` | contents of the `.pem` key file |
+| Secret | `AWS_ACCESS_KEY_ID` | IAM key (CI then uses `dvc pull` from S3) |
+| Secret | `AWS_SECRET_ACCESS_KEY` | IAM secret |
+
+Push to `main` (or Actions → CI/CD → **Run workflow**). The deploy job runs the new image
+on EC2, then checks `http://<EC2_HOST>/health`.
+
+## 6. Verify
+
+Open `http://<EC2-public-IP>/`, draw a digit, and click **Predict drawing**. Or:
+
+```bash
+curl http://<EC2-public-IP>/health
+curl -F image=@sample_images/digit_2.png http://<EC2-public-IP>/predict
+```
+
+## API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Web UI |
+| GET | `/health` | `{"status": "ok"}` |
+| POST | `/predict` | form field `image` → `{"label": 2, "confidence": 0.98}` |

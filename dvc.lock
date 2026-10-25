@@ -1,0 +1,76 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: python prepare.py
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: ee71162fd92c27e7d2903db86174f61f.dir
+      size: 340893
+      nfiles: 1797
+    - path: model.py
+      hash: md5
+      md5: ddcd58a595174db9708f5461ef5aef6a
+      size: 2622
+    - path: prepare.py
+      hash: md5
+      md5: 0d00536667a41aef14f42fafd692490a
+      size: 877
+    params:
+      params.yaml:
+        prepare:
+          test_size: 0.2
+          random_state: 42
+    outs:
+    - path: data/processed
+      hash: md5
+      md5: d4d9b3c1a6c9387da4c7ec43d8d50e3d.dir
+      size: 168442
+      nfiles: 2
+  train:
+    cmd: python train.py
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: d4d9b3c1a6c9387da4c7ec43d8d50e3d.dir
+      size: 168442
+      nfiles: 2
+    - path: model.py
+      hash: md5
+      md5: ddcd58a595174db9708f5461ef5aef6a
+      size: 2622
+    - path: train.py
+      hash: md5
+      md5: c986ea7a13119a32861e837a04a1a0a0
+      size: 495
+    params:
+      params.yaml:
+        train:
+          C: 10
+          gamma: 0.001
+    outs:
+    - path: models/digit_classifier.joblib
+      hash: md5
+      md5: 2f8f42f6b5b6396aee95579c40811486
+      size: 415252
+  evaluate:
+    cmd: python evaluate.py
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: d4d9b3c1a6c9387da4c7ec43d8d50e3d.dir
+      size: 168442
+      nfiles: 2
+    - path: evaluate.py
+      hash: md5
+      md5: 0c49f935721bccfbdc825856e32d0a7d
+      size: 563
+    - path: models/digit_classifier.joblib
+      hash: md5
+      md5: 2f8f42f6b5b6396aee95579c40811486
+      size: 415252
+    outs:
+    - path: metrics.json
+      hash: md5
+      md5: 69291a2ccc93ef7707e947503796f483
+      size: 68

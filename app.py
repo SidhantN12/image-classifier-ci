@@ -1,15 +1,24 @@
-"""Flask API for the handwritten digit image classifier.
+"""Flask web app for the handwritten digit image classifier.
 
+    GET  /         -> web page: draw or upload a digit
     GET  /health   -> {"status": "ok"}
     POST /predict  -> multipart form field "image" (PNG/JPG) -> {"label": 7, "confidence": 0.99}
 """
-from flask import Flask, jsonify, request
+import os
+
+from flask import Flask, jsonify, render_template, request
 from PIL import Image, UnidentifiedImageError
 
 from model import load_model, predict
 
 app = Flask(__name__)
 classifier = load_model()
+MODEL_VERSION = os.environ.get("MODEL_VERSION", "dev")
+
+
+@app.get("/")
+def index():
+    return render_template("index.html", model_version=MODEL_VERSION)
 
 
 @app.get("/health")
@@ -29,4 +38,4 @@ def predict_route():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

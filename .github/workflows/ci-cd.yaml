@@ -1,0 +1,153 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------- CI
+  test:
+    name: Test (DVC pipeline + pytest)
+    runs-on: ubuntu-latest
+    env:
+      HAS_AWS: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Configure AWS credentials
+        if: env.HAS_AWS == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Pull data and model from S3 (DVC)
+        if: env.HAS_AWS == 'true'
+        run: dvc pull
+
+      - name: Regenerate raw dataset (no S3 credentials configured)
+        if: env.HAS_AWS != 'true'
+        run: python export_dataset.py
+
+      - name: Reproduce DVC pipeline
+        run: |
+          dvc repro
+          dvc metrics show
+
+      - name: Run tests
+        run: pytest test.py -v --junitxml=test-results.xml
+
+      - name: Upload model
+        uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: models/digit_classifier.joblib
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            metrics.json
+
+  # ---------------------------------------------------------------- CD: build & push image
+  build:
+    name: Build & push Docker image
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Download model
+        uses: actions/download-artifact@v4
+        with:
+          name: model
+          path: models
+
+      - name: Image name
+        id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg MODEL_VERSION=${GITHUB_SHA::7} \
+            -t ${{ steps.meta.outputs.image }}:latest \
+            -t ${{ steps.meta.outputs.image }}:${{ github.sha }} .
+
+      - name: Smoke-test container
+        run: |
+          docker run -d --name smoke -p 5000:5000 ${{ steps.meta.outputs.image }}:latest
+          for i in $(seq 1 30); do curl -sf localhost:5000/health && break; sleep 1; done
+          curl -sf -F image=@sample_images/digit_2.png localhost:5000/predict
+          docker rm -f smoke
+
+      - name: Push image
+        run: docker push --all-tags ${{ steps.meta.outputs.image }}
+
+  # ---------------------------------------------------------------- CD: deploy to EC2
+  deploy:
+    name: Deploy to AWS EC2
+    needs: build
+    if: github.event_name != 'pull_request' && vars.EC2_HOST != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: http://${{ vars.EC2_HOST }}
+    steps:
+      - name: Deploy container over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ vars.EC2_HOST }}
+          username: ${{ vars.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: IMAGE,GHCR_USER,GHCR_TOKEN
+          script: |
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker pull "$IMAGE"
+            docker rm -f digit-classifier || true
+            docker run -d --name digit-classifier --restart unless-stopped -p 80:5000 "$IMAGE"
+            docker image prune -f
+            docker logout ghcr.io
+
+      - name: Verify deployment
+        run: |
+          for i in $(seq 1 30); do curl -sf http://${{ vars.EC2_HOST }}/health && exit 0; sleep 2; done
+          echo "Application did not become healthy" && exit 1

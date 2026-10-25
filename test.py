@@ -113,3 +113,9 @@ def test_predict_endpoint_invalid_image(client):
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
+
+
+def test_index_page(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"Digit Image Classifier" in resp.data

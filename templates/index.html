@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digit Image Classifier</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1d2330; --muted:#667085; --accent:#2563eb; --line:#e3e6eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+  h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  canvas { width:100%; max-width:280px; aspect-ratio:1; background:#000; border-radius:8px; touch-action:none; cursor:crosshair; display:block; }
+  .row { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  button, label.btn { font: inherit; font-size:14px; border:1px solid var(--line); background:#fff; padding:8px 14px; border-radius:8px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  input[type=file] { display:none; }
+  #preview { max-width:120px; image-rendering: pixelated; border-radius:8px; margin-top:12px; display:none; }
+  .result { margin-top:16px; text-align:center; }
+  .digit { font-size:96px; font-weight:700; line-height:1; }
+  .conf { color:var(--muted); }
+  .err { color:#b42318; }
+  footer { margin-top:24px; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Digit Image Classifier</h1>
+  <p class="sub">Draw a digit (0–9) or upload an image. The SVM model predicts which digit it is.</p>
+  <div class="grid">
+    <div class="card">
+      <h2>Input</h2>
+      <canvas id="pad" width="280" height="280"></canvas>
+      <div class="row">
+        <button class="primary" id="predictDraw">Predict drawing</button>
+        <button id="clear">Clear</button>
+        <label class="btn">Upload image<input type="file" id="file" accept="image/*"></label>
+      </div>
+      <img id="preview" alt="uploaded image">
+    </div>
+    <div class="card">
+      <h2>Prediction</h2>
+      <div class="result" id="result"><span class="conf">No prediction yet</span></div>
+    </div>
+  </div>
+  <footer>Served from Docker · model version {{ model_version }} · <a href="/health">/health</a></footer>
+</main>
+<script>
+const pad = document.getElementById('pad'), ctx = pad.getContext('2d');
+const reset = () => { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, pad.width, pad.height); };
+reset();
+let drawing = false;
+const pos = e => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * pad.width / r.width, (e.clientY - r.top) * pad.height / r.height]; };
+pad.addEventListener('pointerdown', e => { drawing = true; ctx.beginPath(); ctx.moveTo(...pos(e)); });
+pad.addEventListener('pointermove', e => { if (!drawing) return; ctx.lineTo(...pos(e)); ctx.strokeStyle = '#fff'; ctx.lineWidth = 24; ctx.lineCap = 'round'; ctx.stroke(); });
+['pointerup', 'pointerleave'].forEach(ev => pad.addEventListener(ev, () => drawing = false));
+document.getElementById('clear').onclick = reset;
+
+async function send(blob) {
+  const form = new FormData(); form.append('image', blob, 'digit.png');
+  const out = document.getElementById('result');
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: form });
+    const data = await res.json();
+    out.innerHTML = res.ok
+      ? `<div class="digit">${data.label}</div><div class="conf">confidence ${(data.confidence * 100).toFixed(1)}%</div>`
+      : `<span class="err">${data.error}</span>`;
+  } catch (e) { out.innerHTML = `<span class="err">Request failed: ${e}</span>`; }
+}
+document.getElementById('predictDraw').onclick = () => pad.toBlob(send);
+document.getElementById('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = document.getElementById('preview'); img.src = URL.createObjectURL(f); img.style.display = 'block';
+  send(f);
+};
+</script>
+</body>
+</html>

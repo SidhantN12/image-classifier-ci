@@ -1,0 +1,7 @@
+prepare:
+  test_size: 0.2
+  random_state: 42
+
+train:
+  C: 10
+  gamma: 0.001

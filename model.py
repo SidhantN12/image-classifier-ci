@@ -21,15 +21,23 @@ def load_data(test_size=0.2, random_state=42):
     )
 
 
-def train(model_path=MODEL_PATH):
-    """Train an SVM on the 8x8 digits dataset, save it, and return (model, test accuracy)."""
-    X_train, X_test, y_train, y_test = load_data()
-    model = CalibratedClassifierCV(SVC(gamma=0.001, C=10), ensemble=False)
-    model.fit(X_train, y_train)
-    accuracy = model.score(X_test, y_test)
+def build_model(C=10, gamma=0.001):
+    """SVM with calibrated probabilities, so predictions come with a confidence score."""
+    return CalibratedClassifierCV(SVC(C=C, gamma=gamma), ensemble=False)
+
+
+def save_model(model, model_path=MODEL_PATH):
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
-    return model, accuracy
+
+
+def train(model_path=MODEL_PATH):
+    """Train on the bundled digits dataset, save the model, and return (model, test accuracy)."""
+    X_train, X_test, y_train, y_test = load_data()
+    model = build_model()
+    model.fit(X_train, y_train)
+    save_model(model, model_path)
+    return model, model.score(X_test, y_test)
 
 
 def load_model(model_path=MODEL_PATH):

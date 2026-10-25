@@ -1,0 +1,9 @@
+.git
+.dvc/cache
+.dvc/tmp
+data/
+__pycache__/
+.pytest_cache/
+screenshots/
+report/
+*.md
